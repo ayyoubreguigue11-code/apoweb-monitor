@@ -36,6 +36,7 @@ jobs:
         run: python monitor.py
 
       - name: Save state
+        if: always()
         uses: actions/cache/save@v4
         with:
           path: state.json
