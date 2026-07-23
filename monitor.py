@@ -1,22 +1,40 @@
 import os
 import requests
-
+from bs4 import BeautifulSoup
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
 
-message = "✅ تم تشغيل نظام مراقبة نقط APoweb بنجاح."
+LOGIN = os.environ["APO_LOGIN"]
+PASSWORD = os.environ["APO_PASS"]
 
-url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+session = requests.Session()
 
-response = requests.post(
-    url,
-    data={
-        "chat_id": CHAT_ID,
-        "text": message,
-    },
-    timeout=30,
+url = "https://apoweb-ta.uae.ac.ma/dossier_etudiant_fsjes_tanger/"
+
+data = {
+    "Login": LOGIN,
+    "pass": PASSWORD,
+    "submit": "Login"
+}
+
+r = session.post(url, data=data)
+
+html = r.text
+
+if "note" in html.lower() or "moyenne" in html.lower():
+    message = "🎉 تم العثور على صفحة النقط أو ظهور تغيير جديد في APoweb !"
+else:
+    message = "ℹ️ تم فحص APoweb، لا يوجد تغيير جديد."
+
+telegram_url = (
+    f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 )
 
-response.raise_for_status()
-print("Telegram notification sent successfully.")
+requests.post(
+    telegram_url,
+    data={
+        "chat_id": CHAT_ID,
+        "text": message
+    }
+)
