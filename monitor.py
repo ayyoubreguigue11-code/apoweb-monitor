@@ -1,7 +1,9 @@
 import json
 import os
 import re
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import requests
 from bs4 import BeautifulSoup
@@ -24,6 +26,11 @@ def clean_text(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def current_time() -> str:
+    now = datetime.now(ZoneInfo("Africa/Casablanca"))
+    return now.strftime("%d/%m/%Y - %H:%M")
+
+
 def send_telegram(message: str) -> None:
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
@@ -35,6 +42,7 @@ def send_telegram(message: str) -> None:
         },
         timeout=(30, 60),
     )
+
     response.raise_for_status()
 
 
@@ -77,7 +85,7 @@ def fetch_grades() -> dict:
     ):
         raise RuntimeError(
             "فشل تسجيل الدخول إلى APoweb. "
-            "تحقق من APO_LOGIN و APO_PASS."
+            "تحقق من APO_LOGIN وAPO_PASS."
         )
 
     grades = {}
@@ -128,6 +136,7 @@ def load_previous_state() -> dict:
     try:
         with STATE_FILE.open("r", encoding="utf-8") as file:
             return json.load(file)
+
     except (json.JSONDecodeError, OSError):
         return {}
 
@@ -146,34 +155,98 @@ def save_state(grades: dict) -> None:
 def find_changes(old: dict, new: dict) -> list[str]:
     changes = []
 
+    # المواد الجديدة أو النقط التي تم نشرها أو تعديلها
     for subject, current in new.items():
-        previous = old.get(
-            subject,
-            {"note": "", "result": ""},
-        )
-
-        old_note = previous.get("note", "")
         new_note = current.get("note", "")
-
-        old_result = previous.get("result", "")
         new_result = current.get("result", "")
 
-        if old_note != new_note or old_result != new_result:
-            details = [f"📚 {subject}"]
+        if subject not in old:
+            if new_note:
+                title = "🔔 تم نشر نقطة جديدة"
+            else:
+                title = "➕ تمت إضافة مادة جديدة"
 
-            if old_note != new_note:
-                details.append(
-                    f"النقطة: {old_note or 'غير معلنة'}"
-                    f" ⟶ {new_note or 'غير معلنة'}"
-                )
-
-            if old_result != new_result:
-                details.append(
-                    f"النتيجة: {old_result or 'غير معلنة'}"
-                    f" ⟶ {new_result or 'غير معلنة'}"
-                )
+            details = [
+                title,
+                f"📚 المادة: {subject}",
+                f"📝 النقطة: {new_note or 'غير معلنة'}",
+                f"✅ النتيجة: {new_result or 'غير معلنة'}",
+            ]
 
             changes.append("\n".join(details))
+            continue
+
+        previous = old[subject]
+
+        old_note = previous.get("note", "")
+        old_result = previous.get("result", "")
+
+        if old_note == new_note and old_result == new_result:
+            continue
+
+        details = []
+
+        # نشر نقطة كانت غير معلنة
+        if not old_note and new_note:
+            details.append("🔔 تم نشر نقطة جديدة")
+
+        # تعديل نقطة موجودة
+        elif old_note != new_note:
+            details.append("🔄 تم تعديل نقطة")
+
+        # تغيير النتيجة فقط
+        elif old_result != new_result:
+            details.append("⚠️ تم تغيير النتيجة")
+
+        details.append(f"📚 المادة: {subject}")
+
+        if old_note != new_note:
+            details.append(
+                f"📝 النقطة: "
+                f"{old_note or 'غير معلنة'}"
+                f" ⟶ "
+                f"{new_note or 'غير معلنة'}"
+            )
+        else:
+            details.append(
+                f"📝 النقطة: {new_note or 'غير معلنة'}"
+            )
+
+        if old_result != new_result:
+            details.append(
+                f"✅ النتيجة: "
+                f"{old_result or 'غير معلنة'}"
+                f" ⟶ "
+                f"{new_result or 'غير معلنة'}"
+            )
+        else:
+            details.append(
+                f"✅ النتيجة: {new_result or 'غير معلنة'}"
+            )
+
+        changes.append("\n".join(details))
+
+    # المواد التي اختفت أو حُذفت من الجدول
+    for subject, previous in old.items():
+        if subject in new:
+            continue
+
+        changes.append(
+            "\n".join(
+                [
+                    "🗑️ تم حذف مادة أو اختفاؤها من الجدول",
+                    f"📚 المادة: {subject}",
+                    (
+                        f"📝 النقطة السابقة: "
+                        f"{previous.get('note') or 'غير معلنة'}"
+                    ),
+                    (
+                        f"✅ النتيجة السابقة: "
+                        f"{previous.get('result') or 'غير معلنة'}"
+                    ),
+                ]
+            )
+        )
 
     return changes
 
@@ -209,9 +282,12 @@ def main() -> None:
         save_state(current_grades)
 
         send_telegram(
-            "✅ تم ربط مراقب APoweb بنجاح.\n"
-            "تم حفظ النقط الحالية، وسيتم إشعارك "
-            "عند ظهور نقطة جديدة أو حدوث تغيير."
+            "✅ تم تشغيل مراقب APoweb بنجاح.\n\n"
+            "📊 تم حفظ الوضع الحالي للنقط.\n"
+            "🔔 سيتم إشعارك عند نشر نقطة جديدة "
+            "أو حدوث أي تغيير.\n\n"
+            f"🕒 {current_time()}\n\n"
+            "🤖 APoWeb Monitor"
         )
         return
 
@@ -222,12 +298,16 @@ def main() -> None:
 
     if changes:
         message = (
-            "🔔 تم اكتشاف تغيير جديد في نقط APoweb:\n\n"
-            + "\n\n".join(changes)
+            "🎓 FSJES Tanger\n\n"
+            + "\n\n━━━━━━━━━━━━━━\n\n".join(changes)
+            + f"\n\n🕒 وقت الاكتشاف: {current_time()}"
+            + "\n\n🤖 APoWeb Monitor"
         )
 
         send_telegram(message)
         save_state(current_grades)
+
+        print("تم اكتشاف التغيير وإرسال إشعار Telegram.")
 
     else:
         print("لا يوجد أي تغيير في النقط.")
