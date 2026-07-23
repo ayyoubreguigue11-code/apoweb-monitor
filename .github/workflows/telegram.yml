@@ -1,7 +1,10 @@
-name: Telegram Test
+name: APoweb Monitor
 
 on:
   workflow_dispatch:
+
+  schedule:
+    - cron: "*/5 * * * *"
 
 jobs:
   test:
@@ -9,6 +12,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Restore previous state
+        uses: actions/cache@v4
+        with:
+          path: state.json
+          key: apoweb-state
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -18,8 +27,16 @@ jobs:
       - name: Install packages
         run: pip install -r requirements.txt
 
-      - name: Run script
+      - name: Run monitor
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
+          APO_LOGIN: ${{ secrets.APO_LOGIN }}
+          APO_PASS: ${{ secrets.APO_PASS }}
         run: python monitor.py
+
+      - name: Save state
+        uses: actions/cache/save@v4
+        with:
+          path: state.json
+          key: apoweb-state
