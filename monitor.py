@@ -33,7 +33,7 @@ def send_telegram(message: str) -> None:
             "chat_id": CHAT_ID,
             "text": message,
         },
-        timeout=30,
+        timeout=(30, 60),
     )
     response.raise_for_status()
 
@@ -44,14 +44,16 @@ def fetch_grades() -> dict:
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 Chrome/126 Safari/537.36"
+            "AppleWebKit/537.36 "
+            "(KHTML, like Gecko) "
+            "Chrome/126.0 Safari/537.36"
         )
     }
 
     session.get(
         APOWEB_URL,
         headers=headers,
-        timeout=30,
+        timeout=(30, 120),
     )
 
     response = session.post(
@@ -62,13 +64,13 @@ def fetch_grades() -> dict:
             "pass": APO_PASS,
             "submit": "Login",
         },
-        timeout=30,
+        timeout=(30, 120),
     )
+
     response.raise_for_status()
 
     soup = BeautifulSoup(response.text, "html.parser")
 
-    # التأكد من أن تسجيل الدخول نجح
     if (
         soup.select_one('input[name="Login"]')
         and soup.select_one('input[name="pass"]')
@@ -99,7 +101,6 @@ def fetch_grades() -> dict:
         if subject.upper().startswith("SEMESTRE"):
             continue
 
-        # تجاهل عناوين الجدول
         if subject.upper() in {
             "ELEMENT",
             "ÉLÉMENT",
@@ -114,7 +115,7 @@ def fetch_grades() -> dict:
 
     if not grades:
         raise RuntimeError(
-            "تم الدخول، لكن لم يتم العثور على جدول النقط."
+            "تم تسجيل الدخول، لكن لم يتم العثور على جدول النقط."
         )
 
     return grades
@@ -124,8 +125,11 @@ def load_previous_state() -> dict:
     if not STATE_FILE.exists():
         return {}
 
-    with STATE_FILE.open("r", encoding="utf-8") as file:
-        return json.load(file)
+    try:
+        with STATE_FILE.open("r", encoding="utf-8") as file:
+            return json.load(file)
+    except (json.JSONDecodeError, OSError):
+        return {}
 
 
 def save_state(grades: dict) -> None:
@@ -175,16 +179,39 @@ def find_changes(old: dict, new: dict) -> list[str]:
 
 
 def main() -> None:
-    current_grades = fetch_grades()
+    try:
+        current_grades = fetch_grades()
+
+    except (
+        requests.exceptions.ConnectTimeout,
+        requests.exceptions.ReadTimeout,
+        requests.exceptions.ConnectionError,
+    ) as error:
+        print(
+            "تعذر الاتصال بـ APoweb حالياً. "
+            "سيتم تكرار الفحص في التشغيل القادم."
+        )
+        print(error)
+        return
+
+    except requests.exceptions.RequestException as error:
+        print("حدث خطأ أثناء الاتصال بـ APoweb.")
+        print(error)
+        return
+
+    except RuntimeError as error:
+        print(error)
+        return
+
     previous_grades = load_previous_state()
 
-    # أول تشغيل: حفظ الوضع الحالي دون اعتباره تغييراً
     if not previous_grades:
         save_state(current_grades)
+
         send_telegram(
             "✅ تم ربط مراقب APoweb بنجاح.\n"
-            "تم حفظ النقط الحالية كحالة أولية، "
-            "وسيتم إشعارك عند حدوث تغيير."
+            "تم حفظ النقط الحالية، وسيتم إشعارك "
+            "عند ظهور نقطة جديدة أو حدوث تغيير."
         )
         return
 
@@ -198,8 +225,10 @@ def main() -> None:
             "🔔 تم اكتشاف تغيير جديد في نقط APoweb:\n\n"
             + "\n\n".join(changes)
         )
+
         send_telegram(message)
         save_state(current_grades)
+
     else:
         print("لا يوجد أي تغيير في النقط.")
 
